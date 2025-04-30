@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'dart:async';
 import '../../models/task.dart';
 import '../../providers/task_provider.dart';
 import '../../services/speech_service.dart';
@@ -19,10 +20,12 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   final SpeechService _speechService = SpeechService();
-  bool _isListening = false;
+  VoiceButtonState _buttonState = VoiceButtonState.idle;
   String _processingMessage = '';
   bool _isProcessing = false;
   bool _showCommandHelp = false;
+  String? _currentRecognizedText;
+  StreamSubscription? _buttonStateSubscription;
 
   // Animation controller for feedback message
   late AnimationController _animationController;
@@ -42,12 +45,27 @@ class _HomeScreenState extends State<HomeScreen>
       parent: _animationController,
       curve: Curves.easeInOut,
     );
+
+    // Listen to button state changes from the speech service
+    _buttonStateSubscription = _speechService.buttonStateStream.listen((state) {
+      setState(() {
+        _buttonState = state;
+
+        // Update the currently recognized text for listening state
+        if (state == VoiceButtonState.listening) {
+          _currentRecognizedText = _speechService.currentlyRecognizingText;
+        } else {
+          _currentRecognizedText = null;
+        }
+      });
+    });
   }
 
   @override
   void dispose() {
     _speechService.dispose();
     _animationController.dispose();
+    _buttonStateSubscription?.cancel();
     super.dispose();
   }
 
@@ -56,9 +74,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _toggleListening() async {
-    if (_isListening) {
+    if (_buttonState == VoiceButtonState.listening) {
       setState(() {
-        _isListening = false;
+        _buttonState = VoiceButtonState.idle;
       });
       await _speechService.stopListening();
     } else {
@@ -69,7 +87,8 @@ class _HomeScreenState extends State<HomeScreen>
       });
 
       setState(() {
-        _isListening = success;
+        _buttonState =
+            success ? VoiceButtonState.listening : VoiceButtonState.idle;
       });
 
       if (!success) {
@@ -91,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen>
     // Stop listening while processing
     await _speechService.stopListening();
     setState(() {
-      _isListening = false;
+      _buttonState = VoiceButtonState.idle;
     });
 
     // Parse the command
@@ -464,7 +483,8 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       floatingActionButton: VoiceInputButton(
         onPressed: _toggleListening,
-        isListening: _isListening,
+        buttonState: _buttonState,
+        recognizedText: _currentRecognizedText,
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
