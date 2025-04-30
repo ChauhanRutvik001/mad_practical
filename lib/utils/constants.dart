@@ -1,102 +1,130 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class AppConstants {
-  // App-wide theme colors
-  static const Color primaryColor = Color(0xFF4CAF50);
-  static const Color accentColor = Color(0xFF8BC34A);
-  static const Color errorColor = Color(0xFFE53935);
-  static const Color warningColor = Color(0xFFFFB74D);
-  static const Color successColor = Color(0xFF66BB6A);
-  
+  // Colors
+  static const primaryColor = Color(0xFF4A67FF);
+  static const secondaryColor = Color(0xFF7D8FFF);
+  static const accentColor = Color(0xFFFF7D7D);
+  static const backgroundColor = Color(0xFFF5F7FF);
+  static const textColor = Color(0xFF2E3A59);
+  static const successColor = Color(0xFF4CAF50);
+  static const warningColor = Color(0xFFFFA000);
+  static const errorColor = Color(0xFFE53935);
+
+  // Animation durations
+  static const shortAnimationDuration = Duration(milliseconds: 250);
+  static const mediumAnimationDuration = Duration(milliseconds: 500);
+  static const longAnimationDuration = Duration(milliseconds: 800);
+
   // Text styles
-  static const TextStyle headingStyle = TextStyle(
-    fontSize: 24,
+  static final headingStyle = GoogleFonts.nunito(
+    fontSize: 26,
     fontWeight: FontWeight.bold,
-    color: Colors.black87,
+    color: textColor,
   );
-  
-  static const TextStyle subheadingStyle = TextStyle(
+
+  static final subheadingStyle = GoogleFonts.nunito(
     fontSize: 18,
-    fontWeight: FontWeight.w500,
-    color: Colors.black87,
+    fontWeight: FontWeight.w600,
+    color: textColor,
   );
-  
-  static const TextStyle bodyStyle = TextStyle(
+
+  static final bodyStyle = GoogleFonts.nunito(
     fontSize: 16,
-    color: Colors.black87,
+    color: textColor,
   );
-  
-  static const TextStyle captionStyle = TextStyle(
+
+  static final captionStyle = GoogleFonts.nunito(
     fontSize: 14,
-    color: Colors.black54,
+    color: Colors.grey[600],
   );
-  
-  // Task priorities
+
+  static final smallTextStyle = GoogleFonts.nunito(
+    fontSize: 14,
+    color: Colors.grey[600],
+  );
+
+  // UI constants
+  static const double defaultPadding = 16.0;
+  static const double defaultRadius = 12.0;
+  static const double defaultElevation = 2.0;
+
+  // Priority colors
+  static const highPriorityColor = Color(0xFFFF5252);
+  static const mediumPriorityColor = Color(0xFFFFB142);
+  static const lowPriorityColor = Color(0xFF66BB6A);
+
+  // Priority labels
   static const Map<int, String> priorityLabels = {
     1: 'High',
     2: 'Medium',
     3: 'Low',
   };
-  
+
+  // Priority color helpers
   static Color getPriorityColor(int priority) {
     switch (priority) {
       case 1:
-        return Colors.red.shade100;
+        return highPriorityColor.withOpacity(0.2);
       case 2:
-        return Colors.amber.shade100;
+        return mediumPriorityColor.withOpacity(0.2);
       case 3:
-        return Colors.green.shade100;
+        return lowPriorityColor.withOpacity(0.2);
       default:
         return Colors.grey.shade100;
     }
   }
-  
+
   static Color getPriorityTextColor(int priority) {
     switch (priority) {
       case 1:
-        return Colors.red.shade900;
+        return highPriorityColor;
       case 2:
-        return Colors.amber.shade900;
+        return mediumPriorityColor;
       case 3:
-        return Colors.green.shade900;
+        return lowPriorityColor;
       default:
-        return Colors.grey.shade900;
+        return Colors.grey.shade700;
     }
   }
-  
-  // Animation durations
-  static const Duration shortAnimationDuration = Duration(milliseconds: 300);
-  static const Duration mediumAnimationDuration = Duration(milliseconds: 500);
-  static const Duration longAnimationDuration = Duration(milliseconds: 800);
-  
+
   // Voice command examples
   static const List<String> voiceCommandExamples = [
-    "Add a task to buy groceries",
-    "Complete task buy milk",
-    "Delete task send email",
-    "Show my tasks",
-    "Add a high priority task to call mom tomorrow",
+    "Add a task to buy groceries tomorrow",
+    "Add high priority task to call mom",
+    "Mark complete buy groceries",
+    "Delete task call mom",
+    "Show all tasks",
+    "Add a task to finish project with description needs review by Friday",
+    "Remind me to take medicine at 8pm",
+    "Add a task to pay bills on Friday",
+    "Complete task finish report",
+    "Add low priority task to water plants"
   ];
-  
+
   // Feedback messages
   static const Map<String, List<String>> feedbackMessages = {
     'success': [
-      "Task added successfully!",
-      "Task completed!",
-      "Task deleted.",
-      "Task updated successfully!"
+      "Got it!",
+      "Task saved!",
+      "All done!",
+      "Consider it done!",
+      "I've taken care of that for you.",
+      "That's been added to your list."
     ],
     'error': [
-      "I couldn't understand that command.",
-      "Could you try again?",
-      "I didn't catch that. Please try again.",
-      "There was an error processing your command."
+      "I'm not sure I understood that correctly.",
+      "Could you try saying that again?",
+      "I didn't quite catch that.",
+      "Let's try again with different wording.",
+      "I'm having trouble understanding. Could you rephrase that?"
     ],
-    'clarification': [
-      "Did you mean to add a task?",
-      "Did you want to mark a task as complete?",
-      "Did you want to delete a task?",
-      "Could you be more specific?"
-    ],
+    'waiting': [
+      "I'm listening...",
+      "Go ahead, I'm listening.",
+      "What would you like to do?",
+      "Speak now, I'm ready."
+    ]
   };
 }

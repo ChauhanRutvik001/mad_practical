@@ -21,10 +21,11 @@ class TaskTile extends StatefulWidget {
   State<TaskTile> createState() => _TaskTileState();
 }
 
-class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin {
+class _TaskTileState extends State<TaskTile>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
-  
+
   @override
   void initState() {
     super.initState();
@@ -36,12 +37,12 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
       parent: _controller,
       curve: Curves.easeInOut,
     );
-    
+
     if (widget.task.isCompleted) {
       _controller.value = 1.0;
     }
   }
-  
+
   @override
   void didUpdateWidget(TaskTile oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -53,7 +54,7 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
       }
     }
   }
-  
+
   @override
   void dispose() {
     _controller.dispose();
@@ -63,9 +64,11 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
   @override
   Widget build(BuildContext context) {
     // Different colors based on priority
-    final Color priorityColor = AppConstants.getPriorityColor(widget.task.priority);
-    final Color textColor = AppConstants.getPriorityTextColor(widget.task.priority);
-    
+    final Color priorityColor =
+        AppConstants.getPriorityColor(widget.task.priority);
+    final Color textColor =
+        AppConstants.getPriorityTextColor(widget.task.priority);
+
     return AnimatedOpacity(
       opacity: widget.task.isCompleted ? 0.7 : 1.0,
       duration: AppConstants.shortAnimationDuration,
@@ -99,10 +102,14 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
                         height: 24,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: widget.task.isCompleted ? AppConstants.successColor : Colors.transparent,
+                          color: widget.task.isCompleted
+                              ? AppConstants.successColor
+                              : Colors.transparent,
                           border: Border.all(
                             width: 2,
-                            color: widget.task.isCompleted ? AppConstants.successColor : Colors.grey,
+                            color: widget.task.isCompleted
+                                ? AppConstants.successColor
+                                : Colors.grey,
                           ),
                         ),
                         child: Center(
@@ -118,9 +125,9 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
                         ),
                       ),
                     ),
-                    
+
                     const SizedBox(width: 12),
-                    
+
                     // Task title and details
                     Expanded(
                       child: Column(
@@ -152,9 +159,9 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
                                 child: Text(widget.task.description),
                               ),
                             ),
-                            
+
                           const SizedBox(height: 8),
-                          
+
                           // Due date and sync status
                           Row(
                             children: [
@@ -162,32 +169,45 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
                                 Icon(
                                   Icons.calendar_today,
                                   size: 14,
-                                  color: _isOverdue() ? AppConstants.errorColor : Colors.grey[600],
+                                  color: _isOverdue()
+                                      ? AppConstants.errorColor
+                                      : Colors.grey[600],
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
-                                  DateFormat('MMM d, yyyy').format(widget.task.dueDate!),
+                                  DateFormat('MMM d, yyyy')
+                                      .format(widget.task.dueDate!),
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: _isOverdue() ? AppConstants.errorColor : Colors.grey[600],
-                                    fontWeight: _isOverdue() ? FontWeight.bold : FontWeight.normal,
+                                    color: _isOverdue()
+                                        ? AppConstants.errorColor
+                                        : Colors.grey[600],
+                                    fontWeight: _isOverdue()
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
                                   ),
                                 ),
                                 const SizedBox(width: 12),
                               ],
-                              
+
                               // Sync status indicator
                               Icon(
-                                widget.task.isSynced ? Icons.cloud_done : Icons.cloud_off,
+                                widget.task.isSynced
+                                    ? Icons.cloud_done
+                                    : Icons.cloud_off,
                                 size: 14,
-                                color: widget.task.isSynced ? AppConstants.successColor : Colors.grey,
+                                color: widget.task.isSynced
+                                    ? AppConstants.successColor
+                                    : Colors.grey,
                               ),
                               const SizedBox(width: 4),
                               Text(
                                 widget.task.isSynced ? 'Synced' : 'Local only',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: widget.task.isSynced ? AppConstants.successColor : Colors.grey,
+                                  color: widget.task.isSynced
+                                      ? AppConstants.successColor
+                                      : Colors.grey,
                                 ),
                               ),
                             ],
@@ -195,16 +215,18 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
                         ],
                       ),
                     ),
-                    
+
                     // Priority indicator
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: priorityColor,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        AppConstants.priorityLabels[widget.task.priority] ?? 'Medium',
+                        AppConstants.priorityLabels[widget.task.priority] ??
+                            'Medium',
                         style: TextStyle(
                           fontSize: 12,
                           color: textColor,
@@ -227,7 +249,8 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
                             context: context,
                             builder: (context) => AlertDialog(
                               title: const Text('Delete Task'),
-                              content: const Text('Are you sure you want to delete this task?'),
+                              content: const Text(
+                                  'Are you sure you want to delete this task?'),
                               actions: [
                                 TextButton(
                                   onPressed: () => Navigator.pop(context),
@@ -238,7 +261,8 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
                                     Navigator.pop(context);
                                     widget.onDelete();
                                   },
-                                  child: const Text('DELETE', style: TextStyle(color: Colors.red)),
+                                  child: const Text('DELETE',
+                                      style: TextStyle(color: Colors.red)),
                                 ),
                               ],
                             ),
@@ -249,9 +273,10 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
                     ),
                   ],
                 ),
-                
+
                 // Show voice command source if available
-                if (widget.task.voiceCommandSource != null && widget.task.voiceCommandSource!.isNotEmpty)
+                if (widget.task.voiceCommandSource != null &&
+                    widget.task.voiceCommandSource!.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(left: 36, top: 8),
                     child: Row(
@@ -283,7 +308,7 @@ class _TaskTileState extends State<TaskTile> with SingleTickerProviderStateMixin
       ),
     );
   }
-  
+
   bool _isOverdue() {
     if (widget.task.dueDate == null) return false;
     final now = DateTime.now();

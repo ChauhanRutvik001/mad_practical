@@ -10,7 +10,7 @@ class FirebaseService {
   String? get currentUserId => _auth.currentUser?.uid;
 
   // ----- Task Management Methods -----
-  
+
   // Save a task to Firestore
   Future<String?> saveTask(Task task) async {
     try {
@@ -20,10 +20,8 @@ class FirebaseService {
       }
 
       // Reference to the user's tasks collection
-      final userTasksRef = _firestore
-          .collection('users')
-          .doc(currentUserId)
-          .collection('tasks');
+      final userTasksRef =
+          _firestore.collection('users').doc(currentUserId).collection('tasks');
 
       // Add the task document
       final docRef = await userTasksRef.add(task.toMap());
@@ -88,8 +86,10 @@ class FirebaseService {
   // Delete a task
   Future<bool> deleteTask(String taskId) async {
     try {
-      // Make sure user is logged in
-      if (currentUserId == null) {
+      // Make sure user is logged in and taskId is not empty
+      if (currentUserId == null || taskId.isEmpty) {
+        print(
+            'Cannot delete task: ${taskId.isEmpty ? "Empty task ID" : "User not logged in"}');
         return false;
       }
 

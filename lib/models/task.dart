@@ -61,9 +61,9 @@ class Task {
   }
 
   // Create a Task from a Firebase Map
-  factory Task.fromMap(Map<String, dynamic> map, String documentId) {
+  factory Task.fromMap(Map<String, dynamic> map, [String? documentId]) {
     return Task(
-      id: documentId,
+      id: documentId ?? map['id'] ?? '',
       title: map['title'] ?? '',
       description: map['description'] ?? '',
       isCompleted: map['isCompleted'] ?? false,
@@ -75,5 +75,10 @@ class Task {
       isSynced: map['isSynced'] ?? true,
       priority: map['priority'] ?? 2,
     );
+  }
+
+  // Create a Task from a local storage Map
+  factory Task.fromLocalMap(Map<String, dynamic> map) {
+    return Task.fromMap(map);
   }
 }

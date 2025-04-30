@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
-import '../../providers/task_provider.dart';
 import '../../models/task.dart';
+import '../../providers/task_provider.dart';
 import '../../services/speech_service.dart';
 import '../../utils/nlp_parser.dart';
+import '../../utils/constants.dart';
 import '../../widgets/task_tile.dart';
 import '../../widgets/voice_input_button.dart';
 
@@ -15,215 +15,414 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin {
   final SpeechService _speechService = SpeechService();
-  String _statusMessage = '';
-  bool _showCompleted = false;
-  
+  bool _isListening = false;
+  String _processingMessage = '';
+  bool _isProcessing = false;
+  bool _showCommandHelp = false;
+
+  // Animation controller for feedback message
+  late AnimationController _animationController;
+  late Animation<double> _animation;
+
   @override
   void initState() {
     super.initState();
-    _initializeSpeech();
+    _initializeSpeechService();
+
+    _animationController = AnimationController(
+      duration: AppConstants.mediumAnimationDuration,
+      vsync: this,
+    );
+
+    _animation = CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeInOut,
+    );
   }
 
-  Future<void> _initializeSpeech() async {
+  @override
+  void dispose() {
+    _speechService.dispose();
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initializeSpeechService() async {
     await _speechService.initialize();
   }
 
-  Future<void> _logout(BuildContext context) async {
-    try {
-      await FirebaseAuth.instance.signOut();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Logged out successfully'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 1),
-          ),
-        );
-        Navigator.pushNamedAndRemoveUntil(
-          context,
-          '/login',
-          (Route<dynamic> route) => false,
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error logging out: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+  Future<void> _toggleListening() async {
+    if (_isListening) {
+      setState(() {
+        _isListening = false;
+      });
+      await _speechService.stopListening();
+    } else {
+      final taskProvider = Provider.of<TaskProvider>(context, listen: false);
+
+      final success = await _speechService.startListening((result) {
+        _processVoiceCommand(result, taskProvider);
+      });
+
+      setState(() {
+        _isListening = success;
+      });
+
+      if (!success) {
+        _provideFeedback(
+            "I couldn't start listening. Please check microphone permissions.");
       }
     }
   }
 
-  // Start listening for voice commands
-  void _startListening(BuildContext context) async {
+  Future<void> _processVoiceCommand(
+      String command, TaskProvider taskProvider) async {
+    if (command.isEmpty) return;
+
     setState(() {
-      _statusMessage = 'Listening...';
+      _isProcessing = true;
+      _processingMessage = 'Processing: "$command"';
     });
 
-    await _speechService.startListening((recognizedWords) async {
-      if (recognizedWords.isNotEmpty) {
-        setState(() {
-          _statusMessage = 'Processing: "$recognizedWords"';
-        });
-        
-        // Parse the voice command
-        final parsedCommand = NLPParser.parseVoiceCommand(recognizedWords);
-        
-        // Process the command using TaskProvider
-        final taskProvider = Provider.of<TaskProvider>(context, listen: false);
-        final success = await taskProvider.processVoiceCommand(parsedCommand);
-        
-        // Provide feedback
-        if (success) {
-          _provideFeedback('Command processed successfully');
-        } else {
-          _provideFeedback('Sorry, I couldn\'t process that command');
-        }
-      } else {
-        _provideFeedback('Sorry, I didn\'t catch that');
-      }
+    // Stop listening while processing
+    await _speechService.stopListening();
+    setState(() {
+      _isListening = false;
+    });
+
+    // Parse the command
+    final commandData = NLPParser.parseVoiceCommand(command);
+    print('Parsed command: $commandData');
+
+    // Process the command and provide feedback
+    await taskProvider.processVoiceCommand(commandData);
+
+    // Determine appropriate feedback
+    String feedbackMessage;
+    switch (commandData['action']) {
+      case 'add':
+        feedbackMessage = 'Task added: ${commandData['title']}';
+        break;
+      case 'complete':
+        feedbackMessage = 'Task completed: ${commandData['title']}';
+        break;
+      case 'delete':
+        feedbackMessage = 'Task deleted: ${commandData['title']}';
+        break;
+      case 'list':
+        feedbackMessage = 'Here are your tasks';
+        break;
+      case 'update':
+        feedbackMessage = 'Task updated: ${commandData['title']}';
+        break;
+      default:
+        feedbackMessage = 'Command processed';
+    }
+
+    // Provide feedback with a slight delay to feel more natural
+    await Future.delayed(const Duration(milliseconds: 300));
+    _provideFeedback(feedbackMessage);
+
+    setState(() {
+      _isProcessing = false;
+      _processingMessage = '';
     });
   }
-  
-  // Provide audio and text feedback
+
   void _provideFeedback(String message) {
-    setState(() {
-      _statusMessage = message;
-    });
-    
-    // Provide audio feedback
+    // Visual feedback
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(10, 0, 10, 70),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        duration: const Duration(seconds: 2),
+        backgroundColor: AppConstants.primaryColor,
+      ),
+    );
+
+    // Audio feedback using TTS
     _speechService.speak(message);
-    
-    // Clear status message after a delay
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) {
-        setState(() {
-          _statusMessage = '';
-        });
-      }
-    });
+  }
+
+  void _showHelpDialog() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext context) {
+        return Container(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Voice Command Examples',
+                style: AppConstants.headingStyle.copyWith(fontSize: 22),
+              ),
+              const SizedBox(height: 16),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final command in AppConstants.voiceCommandExamples)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8.0),
+                        child: ListTile(
+                          leading: const Icon(Icons.mic,
+                              color: AppConstants.primaryColor),
+                          title: Text(command),
+                          onTap: () {
+                            Navigator.pop(context);
+                            final taskProvider = Provider.of<TaskProvider>(
+                                context,
+                                listen: false);
+                            _processVoiceCommand(command, taskProvider);
+                          },
+                          trailing: const Icon(Icons.play_arrow),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            side: BorderSide(color: Colors.grey.shade300),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Center(
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppConstants.primaryColor,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Close'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Voice To-Do List'),
+        title: Text(
+          'Voice To-Do List',
+          style: AppConstants.subheadingStyle,
+        ),
+        centerTitle: true,
         actions: [
-          IconButton(
-            icon: Icon(_showCompleted ? Icons.check_box : Icons.check_box_outline_blank),
-            onPressed: () {
-              setState(() {
-                _showCompleted = !_showCompleted;
-              });
-            },
-            tooltip: _showCompleted ? 'Hide completed' : 'Show completed',
-          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
-              final taskProvider = Provider.of<TaskProvider>(context, listen: false);
-              taskProvider.loadTasks();
+              final taskProvider =
+                  Provider.of<TaskProvider>(context, listen: false);
+              taskProvider.refreshTasks();
+              _provideFeedback('Tasks refreshed');
             },
             tooltip: 'Refresh tasks',
           ),
           IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => _logout(context),
-            tooltip: 'Logout',
+            icon: const Icon(Icons.help_outline),
+            onPressed: _showHelpDialog,
+            tooltip: 'Show help',
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // Status message display
-          if (_statusMessage.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.all(8.0),
-              color: Colors.green.shade100,
-              width: double.infinity,
-              child: Text(
-                _statusMessage,
-                style: TextStyle(color: Colors.green.shade800),
-                textAlign: TextAlign.center,
+          Column(
+            children: [
+              // Connection status indicator
+              Consumer<TaskProvider>(
+                builder: (context, taskProvider, child) {
+                  final isOnline = taskProvider.isOnline;
+                  final isSyncing = taskProvider.isSyncing;
+
+                  return AnimatedContainer(
+                    duration: AppConstants.shortAnimationDuration,
+                    height: 30,
+                    color: isOnline ? AppConstants.successColor : Colors.grey,
+                    child: Center(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            isOnline ? Icons.cloud_done : Icons.cloud_off,
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            isOnline
+                                ? isSyncing
+                                    ? 'Syncing...'
+                                    : 'Connected - All changes will sync'
+                                : 'Offline - Changes saved locally',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
               ),
-            ),
-          
-          // Task list with provider
-          Expanded(
-            child: Consumer<TaskProvider>(
-              builder: (context, taskProvider, child) {
-                if (taskProvider.isLoading) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                
-                if (taskProvider.error != null) {
-                  return Center(
-                    child: Text(
-                      'Error: ${taskProvider.error}',
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  );
-                }
-                
-                final tasks = _showCompleted
-                    ? taskProvider.tasks
-                    : taskProvider.tasks.where((task) => !task.isCompleted).toList();
-                
-                if (tasks.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text(
-                          'No tasks yet',
-                          style: TextStyle(fontSize: 18),
+
+              // Processing indicator
+              AnimatedContainer(
+                duration: AppConstants.shortAnimationDuration,
+                height: _isProcessing ? 40 : 0,
+                color: AppConstants.warningColor.withOpacity(0.2),
+                child: _isProcessing
+                    ? Center(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppConstants.warningColor,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                _processingMessage,
+                                style: TextStyle(
+                                  color: AppConstants.warningColor,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Tap the microphone button to add a task',
-                          style: TextStyle(fontSize: 14, color: Colors.grey),
+                      )
+                    : null,
+              ),
+
+              // Task list
+              Expanded(
+                child: Consumer<TaskProvider>(
+                  builder: (context, taskProvider, child) {
+                    final tasks = taskProvider.tasks;
+
+                    if (tasks.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            // Replace the missing image with an icon
+                            const Icon(Icons.checklist,
+                                size: 100, color: Colors.grey),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No tasks yet',
+                              style: AppConstants.subheadingStyle,
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'Tap the microphone button to add a task',
+                              style:
+                                  TextStyle(fontSize: 14, color: Colors.grey),
+                            ),
+                            const SizedBox(height: 24),
+                            ElevatedButton.icon(
+                              onPressed: _showHelpDialog,
+                              icon: const Icon(Icons.help_outline),
+                              label: const Text('See Example Commands'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppConstants.primaryColor,
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 24),
-                        ElevatedButton.icon(
-                          onPressed: () => _provideFeedback(
-                              "Try saying: 'Add a task to buy groceries tomorrow'"),
-                          icon: const Icon(Icons.help_outline),
-                          label: const Text('See Example Commands'),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                
-                return ListView.builder(
-                  itemCount: tasks.length,
-                  itemBuilder: (context, index) {
-                    final task = tasks[index];
-                    return TaskTile(
-                      task: task,
-                      onToggleComplete: () {
-                        taskProvider.toggleTaskCompletion(task);
-                      },
-                      onDelete: () {
-                        taskProvider.deleteTask(task.id);
+                      );
+                    }
+
+                    return ListView.builder(
+                      padding: const EdgeInsets.only(bottom: 100),
+                      itemCount: tasks.length,
+                      itemBuilder: (context, index) {
+                        final task = tasks[index];
+                        return TaskTile(
+                          task: task,
+                          onToggleComplete: () {
+                            taskProvider.toggleTaskCompletion(task);
+                          },
+                          onDelete: () {
+                            taskProvider.deleteTask(task.id);
+                          },
+                        );
                       },
                     );
                   },
-                );
-              },
-            ),
+                ),
+              ),
+            ],
           ),
+
+          // Processing animation overlay
+          if (_isProcessing)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  color: Colors.black.withOpacity(0.1),
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.7),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Processing...',
+                            style: AppConstants.bodyStyle
+                                .copyWith(color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
       floatingActionButton: VoiceInputButton(
-        onPressed: () => _startListening(context),
-        isListening: _speechService.isListening,
+        onPressed: _toggleListening,
+        isListening: _isListening,
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );

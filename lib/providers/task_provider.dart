@@ -7,6 +7,7 @@ import '../services/sync_service.dart';
 class TaskProvider extends ChangeNotifier {
   final FirebaseService _firebaseService = FirebaseService();
   final SyncService _syncService = SyncService();
+  final LocalStorageService _localStorageService = LocalStorageService();
 
   List<Task> _tasks = [];
   bool _isLoading = false;
@@ -15,6 +16,8 @@ class TaskProvider extends ChangeNotifier {
   List<Task> get tasks => _tasks;
   bool get isLoading => _isLoading;
   String? get error => _error;
+  bool get isOnline => _syncService.isOnline;
+  bool get isSyncing => _syncService.isSyncing;
 
   TaskProvider() {
     loadTasks();
@@ -28,13 +31,34 @@ class TaskProvider extends ChangeNotifier {
     try {
       if (_syncService.isOnline) {
         // Try to sync tasks first
-        _tasks = await _syncService.syncTasks();
+        _tasks = await _syncService.getAllTasks();
       } else {
         // Offline mode - get tasks from local storage
-        _tasks = await LocalStorageService.getTasks();
+        _tasks = await _localStorageService.getTasks();
       }
     } catch (e) {
       _error = 'Error loading tasks: $e';
+      print(_error);
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // Refresh tasks (sync with remote)
+  Future<void> refreshTasks() async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      if (_syncService.isOnline) {
+        await _syncService.synchronize();
+      }
+
+      // Reload tasks from local storage (which should now be updated)
+      _tasks = await _localStorageService.getTasks();
+    } catch (e) {
+      _error = 'Error refreshing tasks: $e';
       print(_error);
     } finally {
       _isLoading = false;
@@ -48,33 +72,15 @@ class TaskProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      String? taskId;
+      // Use sync service to handle online/offline saving
+      final newTask = await _syncService.addTask(task);
 
-      if (_syncService.isOnline) {
-        // Save to Firebase
-        taskId = await _firebaseService.saveTask(task);
-      } else {
-        // Create a local ID
-        taskId = 'local_${DateTime.now().millisecondsSinceEpoch}';
-      }
-
-      // If successful, add to local list
-      if (taskId != null) {
-        final newTask =
-            task.copyWith(id: taskId, isSynced: _syncService.isOnline);
-        _tasks.insert(0, newTask);
-
-        // Save tasks to local storage too
-        await LocalStorageService.saveTasks(_tasks);
-
-        _isLoading = false;
-        notifyListeners();
-        return true;
-      }
+      // Add to local list
+      _tasks.insert(0, newTask);
 
       _isLoading = false;
       notifyListeners();
-      return false;
+      return true;
     } catch (e) {
       _error = 'Error adding task: $e';
       print(_error);
@@ -90,30 +96,18 @@ class TaskProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      bool success = false;
+      // Use sync service to handle online/offline updating
+      final updatedTask = await _syncService.updateTask(task);
 
-      if (_syncService.isOnline) {
-        // Update in Firebase
-        success = await _firebaseService.updateTask(task);
-      } else {
-        // Mark as not synced yet
-        success = true;
-      }
-
-      if (success) {
-        // Update in local list
-        final index = _tasks.indexWhere((t) => t.id == task.id);
-        if (index != -1) {
-          _tasks[index] = task.copyWith(isSynced: _syncService.isOnline);
-
-          // Save tasks to local storage
-          await LocalStorageService.saveTasks(_tasks);
-        }
+      // Update in local list
+      final index = _tasks.indexWhere((t) => t.id == task.id);
+      if (index != -1) {
+        _tasks[index] = updatedTask;
       }
 
       _isLoading = false;
       notifyListeners();
-      return success;
+      return true;
     } catch (e) {
       _error = 'Error updating task: $e';
       print(_error);
@@ -129,22 +123,21 @@ class TaskProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      bool success = false;
-
-      if (_syncService.isOnline) {
-        // Delete from Firebase
-        success = await _firebaseService.deleteTask(taskId);
-      } else {
-        // Mark as successful locally
-        success = true;
+      // Validate task ID
+      if (taskId.isEmpty) {
+        _error = 'Cannot delete task: Empty task ID';
+        print(_error);
+        _isLoading = false;
+        notifyListeners();
+        return false;
       }
+
+      // Use sync service to handle online/offline deletion
+      final success = await _syncService.deleteTask(taskId);
 
       if (success) {
         // Remove from local list
         _tasks.removeWhere((task) => task.id == taskId);
-
-        // Save updated list to local storage
-        await LocalStorageService.saveTasks(_tasks);
       }
 
       _isLoading = false;
@@ -173,10 +166,20 @@ class TaskProvider extends ChangeNotifier {
     try {
       switch (action) {
         case 'add':
+          // Convert the ISO8601 date string to DateTime if it exists
+          DateTime? dueDate;
+          if (commandData['dueDate'] != null) {
+            if (commandData['dueDate'] is String) {
+              dueDate = DateTime.parse(commandData['dueDate']);
+            } else {
+              dueDate = commandData['dueDate'];
+            }
+          }
+
           final task = Task(
             title: commandData['title'] ?? 'Untitled Task',
             description: commandData['description'] ?? '',
-            dueDate: commandData['dueDate'],
+            dueDate: dueDate,
             priority: commandData['priority'] ?? 2,
             voiceCommandSource: commandData['rawCommand'],
           );
@@ -215,11 +218,20 @@ class TaskProvider extends ChangeNotifier {
           );
 
           if (taskToUpdate.id.isNotEmpty) {
+            // Convert the ISO8601 date string to DateTime if it exists
+            DateTime? dueDate = taskToUpdate.dueDate;
+            if (commandData['dueDate'] != null) {
+              if (commandData['dueDate'] is String) {
+                dueDate = DateTime.parse(commandData['dueDate']);
+              } else {
+                dueDate = commandData['dueDate'];
+              }
+            }
+
             final updatedTask = taskToUpdate.copyWith(
-              title: commandData['description'].isNotEmpty
-                  ? commandData['description']
-                  : taskToUpdate.title,
-              dueDate: commandData['dueDate'] ?? taskToUpdate.dueDate,
+              description:
+                  commandData['description'] ?? taskToUpdate.description,
+              dueDate: dueDate,
               priority: commandData['priority'] ?? taskToUpdate.priority,
             );
             success = await updateTask(updatedTask);

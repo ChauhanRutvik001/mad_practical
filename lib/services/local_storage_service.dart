@@ -3,122 +3,162 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/task.dart';
 
 class LocalStorageService {
-  static const String _tasksKey = 'local_tasks';
-  static const String _pendingCommandsKey = 'pending_commands';
+  // Keys for SharedPreferences
+  static const String _tasksKey = 'tasks';
+  static const String _deletionQueueKey = 'deletion_queue';
 
-  // Save tasks to local storage
-  static Future<bool> saveTasks(List<Task> tasks) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final taskMaps = tasks.map((task) {
-        final map = task.toMap();
-        map['id'] = task.id; // Make sure ID is included
-        return map;
-      }).toList();
+  // Singleton pattern
+  static final LocalStorageService _instance = LocalStorageService._internal();
 
-      final tasksJson = json.encode(taskMaps);
-      return await prefs.setString(_tasksKey, tasksJson);
-    } catch (e) {
-      print('Error saving tasks locally: $e');
-      return false;
+  factory LocalStorageService() {
+    return _instance;
+  }
+
+  LocalStorageService._internal();
+
+  // Save a task locally
+  Future<Task> saveTask(Task task) async {
+    final prefs = await SharedPreferences.getInstance();
+    final tasks = await getTasks();
+
+    // Generate a local ID if the task doesn't have one
+    final taskToSave = task.id.isEmpty
+        ? task.copyWith(id: 'local_${DateTime.now().millisecondsSinceEpoch}')
+        : task;
+
+    // Add the new task (or replace existing one with same ID)
+    final taskIndex = tasks.indexWhere((t) => t.id == taskToSave.id);
+    if (taskIndex >= 0) {
+      tasks[taskIndex] = taskToSave;
+    } else {
+      tasks.add(taskToSave);
+    }
+
+    // Save the updated list
+    await _saveTasks(tasks);
+    return taskToSave;
+  }
+
+  // Update an existing task
+  Future<Task> updateTask(Task task) async {
+    final tasks = await getTasks();
+
+    // Find and update the task
+    final taskIndex = tasks.indexWhere((t) => t.id == task.id);
+    if (taskIndex >= 0) {
+      tasks[taskIndex] = task;
+      await _saveTasks(tasks);
+      return task;
+    } else {
+      // If task doesn't exist locally, save it as new
+      return saveTask(task);
     }
   }
 
-  // Get tasks from local storage
-  static Future<List<Task>> getTasks() async {
+  // Delete a task
+  Future<bool> deleteTask(String taskId) async {
+    final tasks = await getTasks();
+    final initialLength = tasks.length;
+
+    tasks.removeWhere((task) => task.id == taskId);
+
+    if (tasks.length < initialLength) {
+      await _saveTasks(tasks);
+      return true;
+    }
+    return false;
+  }
+
+  // Get a specific task by ID
+  Future<Task?> getTask(String taskId) async {
+    final tasks = await getTasks();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final tasksJson = prefs.getString(_tasksKey);
+      return tasks.firstWhere((task) => task.id == taskId);
+    } catch (e) {
+      return null;
+    }
+  }
 
-      if (tasksJson == null) {
-        return [];
-      }
+  // Get all local tasks
+  Future<List<Task>> getTasks() async {
+    final prefs = await SharedPreferences.getInstance();
 
-      final tasksList = json.decode(tasksJson) as List;
-      return tasksList.map((task) {
-        final Map<String, dynamic> taskMap = Map<String, dynamic>.from(task);
-        return Task.fromMap(taskMap, taskMap['id'] as String);
+    // Get the JSON string containing tasks
+    final tasksJsonString = prefs.getString(_tasksKey);
+    if (tasksJsonString == null || tasksJsonString.isEmpty) {
+      return [];
+    }
+
+    try {
+      // Parse the JSON
+      final List<dynamic> tasksList = json.decode(tasksJsonString);
+      return tasksList.map((taskMap) {
+        // Include id in the map for local storage
+        Map<String, dynamic> fullMap = Map<String, dynamic>.from(taskMap);
+        if (taskMap['id'] != null) {
+          return Task.fromMap(fullMap);
+        } else {
+          // Fallback for legacy data format
+          String id = fullMap['id'] ?? '';
+          return Task.fromMap(fullMap, id);
+        }
       }).toList();
     } catch (e) {
-      print('Error retrieving local tasks: $e');
+      print('Error parsing tasks from storage: $e');
       return [];
     }
   }
 
-  // Queue a pending command for later processing
-  static Future<bool> queueCommand(Map<String, dynamic> commandData) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final pendingCommandsJson = prefs.getString(_pendingCommandsKey);
+  // Get all unsynced tasks
+  Future<List<Task>> getUnsyncedTasks() async {
+    final tasks = await getTasks();
+    return tasks.where((task) => !task.isSynced).toList();
+  }
 
-      List<Map<String, dynamic>> pendingCommands = [];
-      if (pendingCommandsJson != null) {
-        final decodedList = json.decode(pendingCommandsJson) as List;
-        pendingCommands =
-            decodedList.map((item) => Map<String, dynamic>.from(item)).toList();
-      }
+  // Save the full task list
+  Future<void> _saveTasks(List<Task> tasks) async {
+    final prefs = await SharedPreferences.getInstance();
 
-      // Add timestamp to command
-      commandData['queuedAt'] = DateTime.now().toIso8601String();
+    // Convert tasks to JSON
+    final tasksMaps = tasks.map((task) => task.toMap()).toList();
+    final tasksJsonString = json.encode(tasksMaps);
 
-      // Add to pending commands
-      pendingCommands.add(commandData);
+    // Save to SharedPreferences
+    await prefs.setString(_tasksKey, tasksJsonString);
+  }
 
-      // Save back to prefs
-      return await prefs.setString(
-          _pendingCommandsKey, json.encode(pendingCommands));
-    } catch (e) {
-      print('Error queueing command: $e');
-      return false;
+  // Add a task ID to the deletion queue
+  Future<void> addToDeletionQueue(String taskId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final queue = await getDeletionQueue();
+
+    if (!queue.contains(taskId)) {
+      queue.add(taskId);
+      await prefs.setStringList(_deletionQueueKey, queue);
     }
   }
 
-  // Get pending commands
-  static Future<List<Map<String, dynamic>>> getPendingCommands() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final pendingCommandsJson = prefs.getString(_pendingCommandsKey);
+  // Remove a task ID from the deletion queue
+  Future<void> removeFromDeletionQueue(String taskId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final queue = await getDeletionQueue();
 
-      if (pendingCommandsJson == null) {
-        return [];
-      }
-
-      final decodedList = json.decode(pendingCommandsJson) as List;
-      return decodedList
-          .map((item) => Map<String, dynamic>.from(item))
-          .toList();
-    } catch (e) {
-      print('Error retrieving pending commands: $e');
-      return [];
+    if (queue.contains(taskId)) {
+      queue.remove(taskId);
+      await prefs.setStringList(_deletionQueueKey, queue);
     }
   }
 
-  // Clear pending commands
-  static Future<bool> clearPendingCommands() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return await prefs.remove(_pendingCommandsKey);
-    } catch (e) {
-      print('Error clearing pending commands: $e');
-      return false;
-    }
+  // Get the deletion queue
+  Future<List<String>> getDeletionQueue() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_deletionQueueKey) ?? [];
   }
 
-  // Clear specific pending command
-  static Future<bool> removePendingCommand(int index) async {
-    try {
-      final pendingCommands = await getPendingCommands();
-      if (index >= 0 && index < pendingCommands.length) {
-        pendingCommands.removeAt(index);
-
-        final prefs = await SharedPreferences.getInstance();
-        return await prefs.setString(
-            _pendingCommandsKey, json.encode(pendingCommands));
-      }
-      return false;
-    } catch (e) {
-      print('Error removing pending command: $e');
-      return false;
-    }
+  // Clear all local task data
+  Future<void> clearAllData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_tasksKey);
+    await prefs.remove(_deletionQueueKey);
   }
 }

@@ -1,16 +1,21 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../models/task.dart';
-import 'local_storage_service.dart';
-import 'firebase_service.dart';
+import '../services/firebase_service.dart';
+import '../services/local_storage_service.dart';
 
 class SyncService {
   final FirebaseService _firebaseService = FirebaseService();
+  final LocalStorageService _localStorageService = LocalStorageService();
   final Connectivity _connectivity = Connectivity();
-  StreamSubscription<ConnectivityResult>? _connectivitySubscription;
-  bool _isOnline = false;
 
-  // Singleton instance
+  bool _isOnline = false;
+  bool _isSyncing = false;
+
+  StreamSubscription<ConnectivityResult>? _connectivitySubscription;
+  Timer? _periodicSyncTimer;
+
+  // Singleton pattern
   static final SyncService _instance = SyncService._internal();
 
   factory SyncService() {
@@ -18,167 +23,252 @@ class SyncService {
   }
 
   SyncService._internal() {
-    // Initial connectivity check
-    _checkConnectivity();
+    _initConnectivity();
+    _setupConnectivityListener();
+  }
 
-    // Listen for connectivity changes
+  // Initialize connectivity state
+  Future<void> _initConnectivity() async {
+    try {
+      final result = await _connectivity.checkConnectivity();
+      _updateConnectionStatus(result);
+    } catch (e) {
+      print('Failed to get connectivity status: $e');
+      _isOnline = false;
+    }
+  }
+
+  // Setup listener for connectivity changes
+  void _setupConnectivityListener() {
     _connectivitySubscription =
-        _connectivity.onConnectivityChanged.listen((result) {
-      if (result == ConnectivityResult.mobile ||
-          result == ConnectivityResult.wifi) {
-        if (!_isOnline) {
-          _isOnline = true;
-          syncPendingCommands();
-        }
-      } else {
-        _isOnline = false;
+        _connectivity.onConnectivityChanged.listen((ConnectivityResult result) {
+      _updateConnectionStatus(result);
+    });
+
+    // Setup a periodic sync attempt every 5 minutes
+    _periodicSyncTimer =
+        Timer.periodic(const Duration(minutes: 5), (Timer t) async {
+      if (_isOnline && !_isSyncing) {
+        await synchronize();
       }
     });
   }
 
-  // Check current connectivity
-  Future<void> _checkConnectivity() async {
-    final result = await _connectivity.checkConnectivity();
-    _isOnline = result == ConnectivityResult.mobile ||
-        result == ConnectivityResult.wifi;
-  }
+  // Update connectivity status and trigger sync if needed
+  void _updateConnectionStatus(ConnectivityResult result) async {
+    final wasOffline = !_isOnline;
+    _isOnline = result != ConnectivityResult.none;
 
-  // Dispose of resources
-  void dispose() {
-    _connectivitySubscription?.cancel();
-  }
-
-  // Get online status
-  bool get isOnline => _isOnline;
-
-  // Process a voice command based on connectivity
-  Future<bool> processCommand(Map<String, dynamic> commandData) async {
-    if (_isOnline) {
-      // Process online
-      return await _processCommandOnline(commandData);
-    } else {
-      // Queue for later processing
-      return await LocalStorageService.queueCommand(commandData);
+    // If we just came back online, trigger a sync
+    if (wasOffline && _isOnline) {
+      print('Network connection restored. Starting sync...');
+      await synchronize();
+    } else if (!_isOnline) {
+      print('Network connection lost. Tasks will be stored locally.');
     }
   }
 
-  // Process a command online
-  Future<bool> _processCommandOnline(Map<String, dynamic> commandData) async {
-    final action = commandData['action'] as String;
+  // Get the current online status
+  bool get isOnline => _isOnline;
+
+  // Get the current syncing status
+  bool get isSyncing => _isSyncing;
+
+  // Add a task with proper sync handling
+  Future<Task> addTask(Task task) async {
+    // Always save to local storage first
+    Task localTask = await _localStorageService.saveTask(task);
+
+    // If online, also save to Firebase
+    if (_isOnline) {
+      try {
+        final taskId = await _firebaseService.saveTask(localTask);
+        if (taskId != null) {
+          // Update the local task with server ID and synced status
+          localTask = localTask.copyWith(
+            id: taskId,
+            isSynced: true,
+          );
+
+          // Update the local storage with the synced task
+          await _localStorageService.updateTask(localTask);
+        }
+      } catch (e) {
+        print('Error saving task to Firebase: $e');
+        // Keep the task in local storage with isSynced = false
+      }
+    }
+
+    return localTask;
+  }
+
+  // Update a task with sync handling
+  Future<Task> updateTask(Task task) async {
+    // Always update local storage
+    Task updatedLocalTask = await _localStorageService.updateTask(task);
+
+    // If online and task was previously synced, update Firebase
+    if (_isOnline && task.isSynced) {
+      try {
+        final success = await _firebaseService.updateTask(updatedLocalTask);
+        if (success) {
+          updatedLocalTask = updatedLocalTask.copyWith(isSynced: true);
+        } else {
+          updatedLocalTask = updatedLocalTask.copyWith(isSynced: false);
+        }
+      } catch (e) {
+        print('Error updating task in Firebase: $e');
+        updatedLocalTask = updatedLocalTask.copyWith(isSynced: false);
+      }
+    } else {
+      // Mark as not synced if we're offline
+      updatedLocalTask = updatedLocalTask.copyWith(isSynced: false);
+    }
+
+    // Make sure local storage is up to date with sync status
+    await _localStorageService.updateTask(updatedLocalTask);
+    return updatedLocalTask;
+  }
+
+  // Delete a task with sync handling
+  Future<bool> deleteTask(String taskId) async {
+    // Check if taskId is empty
+    if (taskId.isEmpty) {
+      print('Cannot delete task: Empty task ID');
+      return false;
+    }
+
+    // Always delete from local storage first
+    await _localStorageService.deleteTask(taskId);
+
+    // If online, also delete from Firebase
+    if (_isOnline) {
+      try {
+        await _firebaseService.deleteTask(taskId);
+        return true;
+      } catch (e) {
+        print('Error deleting task from Firebase: $e');
+        // Add task ID to a deletion queue for later sync
+        await _localStorageService.addToDeletionQueue(taskId);
+        return false;
+      }
+    } else {
+      // Add to deletion queue for later sync
+      await _localStorageService.addToDeletionQueue(taskId);
+      return true;
+    }
+  }
+
+  // Get all tasks with proper merge of local and remote
+  Future<List<Task>> getAllTasks() async {
+    // Get local tasks first
+    List<Task> tasks = await _localStorageService.getTasks();
+
+    // If online, try to sync with remote
+    if (_isOnline) {
+      try {
+        await synchronize();
+        // Get updated list after sync
+        tasks = await _localStorageService.getTasks();
+      } catch (e) {
+        print('Error syncing tasks: $e');
+      }
+    }
+
+    return tasks;
+  }
+
+  // Main synchronization method
+  Future<void> synchronize() async {
+    if (_isSyncing || !_isOnline) return;
+
+    _isSyncing = true;
+    print('Starting synchronization...');
 
     try {
-      switch (action) {
-        case 'add':
-          final task = Task(
-            title: commandData['title'] ?? 'Untitled Task',
-            description: commandData['description'] ?? '',
-            dueDate: commandData['dueDate'],
-            priority: commandData['priority'] ?? 2,
-            voiceCommandSource: commandData['rawCommand'],
-          );
-
-          final taskId = await _firebaseService.saveTask(task);
-          return taskId != null;
-
-        case 'complete':
-        case 'update':
-          // Find existing task in Firebase
-          final tasks = await _firebaseService.getUserTasks();
-          final title = commandData['title'] ?? '';
-          final taskToUpdate = tasks.firstWhere(
-            (task) =>
-                task.title.toLowerCase().contains(title.toLowerCase()) ||
-                title.toLowerCase().contains(task.title.toLowerCase()),
-            orElse: () => Task(title: ''),
-          );
-
-          if (taskToUpdate.id.isEmpty) return false;
-
-          Task updatedTask;
-          if (action == 'complete') {
-            updatedTask = taskToUpdate.copyWith(isCompleted: true);
-          } else {
-            updatedTask = taskToUpdate.copyWith(
-              title: commandData['description'].isNotEmpty
-                  ? commandData['description']
-                  : taskToUpdate.title,
-              dueDate: commandData['dueDate'] ?? taskToUpdate.dueDate,
-              priority: commandData['priority'] ?? taskToUpdate.priority,
-            );
-          }
-
-          return await _firebaseService.updateTask(updatedTask);
-
-        case 'delete':
-          final tasks = await _firebaseService.getUserTasks();
-          final title = commandData['title'] ?? '';
-          final taskToDelete = tasks.firstWhere(
-            (task) =>
-                task.title.toLowerCase().contains(title.toLowerCase()) ||
-                title.toLowerCase().contains(task.title.toLowerCase()),
-            orElse: () => Task(title: ''),
-          );
-
-          if (taskToDelete.id.isEmpty) return false;
-          return await _firebaseService.deleteTask(taskToDelete.id);
-
-        default:
-          return false;
+      // Process deletion queue first
+      List<String> deletionQueue =
+          await _localStorageService.getDeletionQueue();
+      for (String taskId in deletionQueue) {
+        try {
+          await _firebaseService.deleteTask(taskId);
+          await _localStorageService.removeFromDeletionQueue(taskId);
+        } catch (e) {
+          print('Error deleting task $taskId during sync: $e');
+        }
       }
+
+      // Get all unsynced local tasks
+      List<Task> unsyncedTasks = await _localStorageService.getUnsyncedTasks();
+
+      for (Task task in unsyncedTasks) {
+        try {
+          if (task.id.isEmpty) {
+            // New task that hasn't been synced yet
+            final taskId = await _firebaseService.saveTask(task);
+            if (taskId != null) {
+              Task syncedTask = task.copyWith(id: taskId, isSynced: true);
+              await _localStorageService.updateTask(syncedTask);
+            }
+          } else {
+            // Existing task that needs updating
+            final success = await _firebaseService.updateTask(task);
+            if (success) {
+              Task syncedTask = task.copyWith(isSynced: true);
+              await _localStorageService.updateTask(syncedTask);
+            }
+          }
+        } catch (e) {
+          print('Error syncing task ${task.id}: $e');
+        }
+      }
+
+      // Get all remote tasks and merge with local
+      final remoteTasks = await _firebaseService.getUserTasks();
+
+      // For each remote task, make sure it exists locally
+      for (Task remoteTask in remoteTasks) {
+        try {
+          Task? localTask = await _localStorageService.getTask(remoteTask.id);
+
+          if (localTask == null) {
+            // New remote task, add to local storage
+            await _localStorageService
+                .saveTask(remoteTask.copyWith(isSynced: true));
+          } else if (remoteTask.createdAt.isAfter(localTask.createdAt)) {
+            // Remote task is newer, update local (conflict resolution)
+            await _localStorageService
+                .updateTask(remoteTask.copyWith(isSynced: true));
+          }
+        } catch (e) {
+          print('Error processing remote task ${remoteTask.id}: $e');
+        }
+      }
+
+      print('Synchronization completed');
     } catch (e) {
-      print('Error processing command online: $e');
+      print('Error during synchronization: $e');
+    } finally {
+      _isSyncing = false;
+    }
+  }
+
+  // Manually trigger a synchronization
+  Future<bool> forceSynchronize() async {
+    if (!_isOnline) return false;
+
+    try {
+      await synchronize();
+      return true;
+    } catch (e) {
+      print('Error forcing synchronization: $e');
       return false;
     }
   }
 
-  // Sync pending commands when coming back online
-  Future<void> syncPendingCommands() async {
-    try {
-      print('Starting to sync pending commands...');
-      final pendingCommands = await LocalStorageService.getPendingCommands();
-
-      if (pendingCommands.isEmpty) {
-        print('No pending commands to sync');
-        return;
-      }
-
-      print('Found ${pendingCommands.length} pending commands to sync');
-
-      // Process each command
-      for (int i = 0; i < pendingCommands.length; i++) {
-        final commandData = pendingCommands[i];
-        final success = await _processCommandOnline(commandData);
-
-        if (success) {
-          await LocalStorageService.removePendingCommand(i);
-          // Adjust index since we removed an item
-          i--;
-        }
-      }
-
-      print('Sync completed');
-    } catch (e) {
-      print('Error syncing pending commands: $e');
-    }
-  }
-
-  // Sync local tasks with server tasks
-  Future<List<Task>> syncTasks() async {
-    if (!_isOnline) {
-      return await LocalStorageService.getTasks();
-    }
-
-    try {
-      // Get tasks from server
-      final serverTasks = await _firebaseService.getUserTasks();
-
-      // Save to local storage
-      await LocalStorageService.saveTasks(serverTasks);
-
-      return serverTasks;
-    } catch (e) {
-      print('Error syncing tasks: $e');
-      return await LocalStorageService.getTasks();
-    }
+  // Clean up resources
+  void dispose() {
+    _connectivitySubscription?.cancel();
+    _periodicSyncTimer?.cancel();
   }
 }
