@@ -161,8 +161,8 @@ class SyncService {
 
   // Get all tasks with proper merge of local and remote
   Future<List<Task>> getAllTasks() async {
-    // Get local tasks first
-    List<Task> tasks = await _localStorageService.getTasks();
+    // First, clean up duplicates in local storage
+    List<Task> tasks = await _localStorageService.cleanupDuplicateTasks();
 
     // If online, try to sync with remote
     if (_isOnline) {
@@ -186,6 +186,9 @@ class SyncService {
     print('Starting synchronization...');
 
     try {
+      // First, clean up any duplicates in local storage
+      await _localStorageService.cleanupDuplicateTasks();
+
       // Process deletion queue first
       List<String> deletionQueue =
           await _localStorageService.getDeletionQueue();
@@ -203,7 +206,7 @@ class SyncService {
 
       for (Task task in unsyncedTasks) {
         try {
-          if (task.id.isEmpty) {
+          if (task.id.isEmpty || task.id.startsWith('local_')) {
             // New task that hasn't been synced yet
             final taskId = await _firebaseService.saveTask(task);
             if (taskId != null) {
@@ -223,27 +226,58 @@ class SyncService {
         }
       }
 
-      // Get all remote tasks and merge with local
+      // Get all remote tasks
       final remoteTasks = await _firebaseService.getUserTasks();
+
+      // First get all existing local tasks for comparison
+      final localTasks = await _localStorageService.getTasks();
+      final localTaskIds = localTasks.map((t) => t.id).toSet();
+
+      // Also track task signatures (title+createDate) to avoid duplicate content
+      final localTaskSignatures = localTasks
+          .map((t) => '${t.title}|${t.createdAt.toIso8601String()}')
+          .toSet();
+
+      // Track processed tasks to avoid duplicates
+      final Set<String> processedRemoteIds = <String>{};
 
       // For each remote task, make sure it exists locally
       for (Task remoteTask in remoteTasks) {
         try {
-          Task? localTask = await _localStorageService.getTask(remoteTask.id);
+          // Skip empty IDs or already processed IDs
+          if (remoteTask.id.isEmpty ||
+              processedRemoteIds.contains(remoteTask.id)) {
+            continue;
+          }
 
-          if (localTask == null) {
-            // New remote task, add to local storage
+          processedRemoteIds.add(remoteTask.id);
+
+          // Create signature to check for duplicates
+          final taskSignature =
+              '${remoteTask.title}|${remoteTask.createdAt.toIso8601String()}';
+
+          // Only add remote tasks that don't already exist locally by ID or signature
+          if (!localTaskIds.contains(remoteTask.id) &&
+              !localTaskSignatures.contains(taskSignature)) {
             await _localStorageService
                 .saveTask(remoteTask.copyWith(isSynced: true));
-          } else if (remoteTask.createdAt.isAfter(localTask.createdAt)) {
-            // Remote task is newer, update local (conflict resolution)
-            await _localStorageService
-                .updateTask(remoteTask.copyWith(isSynced: true));
+          }
+          // For tasks that exist both locally and remotely, update if remote is newer
+          else if (localTaskIds.contains(remoteTask.id)) {
+            Task? localTask = await _localStorageService.getTask(remoteTask.id);
+            if (localTask != null &&
+                remoteTask.createdAt.isAfter(localTask.createdAt)) {
+              await _localStorageService
+                  .updateTask(remoteTask.copyWith(isSynced: true));
+            }
           }
         } catch (e) {
           print('Error processing remote task ${remoteTask.id}: $e');
         }
       }
+
+      // Final cleanup of duplicates after sync
+      await _localStorageService.cleanupDuplicateTasks();
 
       print('Synchronization completed');
     } catch (e) {

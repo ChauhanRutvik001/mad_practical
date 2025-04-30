@@ -92,21 +92,73 @@ class LocalStorageService {
     try {
       // Parse the JSON
       final List<dynamic> tasksList = json.decode(tasksJsonString);
-      return tasksList.map((taskMap) {
+      final tasks = tasksList.map((taskMap) {
         // Include id in the map for local storage
         Map<String, dynamic> fullMap = Map<String, dynamic>.from(taskMap);
-        if (taskMap['id'] != null) {
+
+        // Make sure the ID field exists and is not empty
+        if (taskMap['id'] != null && taskMap['id'].toString().isNotEmpty) {
           return Task.fromMap(fullMap);
         } else {
-          // Fallback for legacy data format
-          String id = fullMap['id'] ?? '';
-          return Task.fromMap(fullMap, id);
+          // If no ID or empty ID, generate a new local ID
+          String taskId =
+              'local_${DateTime.now().millisecondsSinceEpoch}_${taskMap.hashCode}';
+          fullMap['id'] = taskId;
+          return Task.fromMap(fullMap);
         }
       }).toList();
+
+      // Deduplicate tasks if needed
+      return _deduplicateTasks(tasks);
     } catch (e) {
       print('Error parsing tasks from storage: $e');
       return [];
     }
+  }
+
+  // Helper to remove duplicate tasks from a list
+  List<Task> _deduplicateTasks(List<Task> tasks) {
+    // Use a map to track unique tasks based on title + createdAt
+    final Map<String, Task> uniqueTasks = {};
+
+    // Sort by ID first (preserving Firebase IDs over local ones)
+    tasks.sort((a, b) {
+      if (a.id.startsWith('local_') && !b.id.startsWith('local_')) {
+        return 1; // b comes first
+      } else if (!a.id.startsWith('local_') && b.id.startsWith('local_')) {
+        return -1; // a comes first
+      } else {
+        return 0; // preserve original order
+      }
+    });
+
+    // Then deduplicate based on title+createdAt
+    for (final task in tasks) {
+      // Create a unique key for each task based on title and creation time
+      final uniqueKey = '${task.title}|${task.createdAt.toIso8601String()}';
+
+      // Only keep the first task with this key (which will be the non-local ID due to sorting)
+      if (!uniqueTasks.containsKey(uniqueKey)) {
+        uniqueTasks[uniqueKey] = task;
+      }
+    }
+
+    return uniqueTasks.values.toList();
+  }
+
+  // Clean up duplicate tasks in storage and return the cleaned list
+  Future<List<Task>> cleanupDuplicateTasks() async {
+    final tasks = await getTasks();
+    final deduplicatedTasks = _deduplicateTasks(tasks);
+
+    // Only save if the number of tasks changed
+    if (deduplicatedTasks.length != tasks.length) {
+      await _saveTasks(deduplicatedTasks);
+      print(
+          'Cleaned up ${tasks.length - deduplicatedTasks.length} duplicate tasks');
+    }
+
+    return deduplicatedTasks;
   }
 
   // Get all unsynced tasks
@@ -120,7 +172,13 @@ class LocalStorageService {
     final prefs = await SharedPreferences.getInstance();
 
     // Convert tasks to JSON
-    final tasksMaps = tasks.map((task) => task.toMap()).toList();
+    final tasksMaps = tasks.map((task) {
+      // Make sure to include the ID in the map
+      Map<String, dynamic> taskMap = task.toMap();
+      taskMap['id'] = task.id; // Add ID to ensure it's preserved
+      return taskMap;
+    }).toList();
+
     final tasksJsonString = json.encode(tasksMaps);
 
     // Save to SharedPreferences

@@ -51,14 +51,34 @@ class TaskProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // First clean up any duplicates in local storage
+      await _localStorageService.cleanupDuplicateTasks();
+
       if (_syncService.isOnline) {
         await _syncService.synchronize();
       }
 
-      // Reload tasks from local storage (which should now be updated)
+      // Reload tasks from local storage (which should now be updated and deduplicated)
       _tasks = await _localStorageService.getTasks();
     } catch (e) {
       _error = 'Error refreshing tasks: $e';
+      print(_error);
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // Clear all tasks (for troubleshooting)
+  Future<void> clearAllTasks() async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      await _localStorageService.clearAllData();
+      _tasks = [];
+    } catch (e) {
+      _error = 'Error clearing tasks: $e';
       print(_error);
     } finally {
       _isLoading = false;
@@ -126,6 +146,21 @@ class TaskProvider extends ChangeNotifier {
       // Validate task ID
       if (taskId.isEmpty) {
         _error = 'Cannot delete task: Empty task ID';
+        print(_error);
+        _isLoading = false;
+        notifyListeners();
+        return false;
+      }
+
+      // Find task to delete
+      final taskToDelete = _tasks.firstWhere(
+        (task) => task.id == taskId,
+        orElse: () => Task(title: ''),
+      );
+
+      // Double check we have a valid task
+      if (taskToDelete.id.isEmpty) {
+        _error = 'Task not found in current list';
         print(_error);
         _isLoading = false;
         notifyListeners();

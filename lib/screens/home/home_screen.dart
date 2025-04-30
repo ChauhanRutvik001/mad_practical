@@ -7,6 +7,7 @@ import '../../utils/nlp_parser.dart';
 import '../../utils/constants.dart';
 import '../../widgets/task_tile.dart';
 import '../../widgets/voice_input_button.dart';
+import '../../screens/auth/login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -215,6 +216,42 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  Future<void> _logout() async {
+    // Show a confirmation dialog
+    final shouldLogout = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Logout'),
+            content: const Text('Are you sure you want to logout?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('CANCEL'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('LOGOUT'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (shouldLogout) {
+      // Clean up any user-specific data
+      final taskProvider = Provider.of<TaskProvider>(context, listen: false);
+      await taskProvider.clearAllTasks();
+
+      // Show feedback
+      _provideFeedback('Logging out...');
+
+      // Navigate to login screen
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -239,6 +276,11 @@ class _HomeScreenState extends State<HomeScreen>
             icon: const Icon(Icons.help_outline),
             onPressed: _showHelpDialog,
             tooltip: 'Show help',
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: _logout,
+            tooltip: 'Logout',
           ),
         ],
       ),

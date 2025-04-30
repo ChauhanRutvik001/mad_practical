@@ -244,6 +244,18 @@ class _TaskTileState extends State<TaskTile>
                         color: Colors.grey.shade600,
                         splashRadius: 24,
                         onPressed: () {
+                          // Check if task ID is empty
+                          if (widget.task.id.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content:
+                                    Text('Cannot delete task: Empty task ID'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                            return;
+                          }
+
                           // Add confirmation dialog
                           showDialog(
                             context: context,
